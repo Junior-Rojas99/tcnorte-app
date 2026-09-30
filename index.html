@@ -1385,7 +1385,8 @@ function showSub(name){
 }
 
 // ── INIT ──────────────────────────────────────────────────────────────────
-const HOY=new Date(), HOY_STR=HOY.toISOString().split('T')[0];
+function fechaLocal(d){return d.getFullYear()+'-'+String(d.getMonth()+1).padStart(2,'0')+'-'+String(d.getDate()).padStart(2,'0');}
+const HOY=new Date(), HOY_STR=HOY.getFullYear()+'-'+String(HOY.getMonth()+1).padStart(2,'0')+'-'+String(HOY.getDate()).padStart(2,'0'); // fecha local (antes usaba UTC y después de las 6 pm marcaba el día siguiente)
 const h=HOY.getHours();
 document.getElementById('fechaHoy').textContent=HOY.toLocaleDateString('es-MX',{weekday:'long',day:'numeric',month:'long',year:'numeric'});
 document.getElementById('saludoTit').textContent=(h<12?'Buenos días':h<18?'Buenas tardes':'Buenas noches')+', Miguel 👋';
@@ -1657,7 +1658,7 @@ function renderTorton(){
   const MESES_L=['Enero','Febrero','Marzo','Abril','Mayo','Junio','Julio','Agosto','Septiembre','Octubre','Noviembre','Diciembre'];
   if(vistaTorton==='semana'){
     const dias=[];
-    for(let i=0;i<14;i++){const d=new Date(HOY);d.setDate(d.getDate()+i);dias.push(d.toISOString().split('T')[0]);}
+    for(let i=0;i<14;i++){const d=new Date(HOY);d.setDate(d.getDate()+i);dias.push(fechaLocal(d));}
     DB.torton.forEach(t=>{if(t.fecha>=HOY_STR&&!dias.includes(t.fecha))dias.push(t.fecha);});
     dias.sort();
     let html='';
@@ -1665,7 +1666,7 @@ function renderTorton(){
       const ents=DB.torton.filter(t=>t.fecha===dia);
       const esHoy=dia===HOY_STR;
       const manana=new Date(HOY);manana.setDate(manana.getDate()+1);
-      const esMañana=dia===manana.toISOString().split('T')[0];
+      const esMañana=dia===fechaLocal(manana);
       const fo=new Date(dia+'T12:00:00');
       const nom=DIAS[fo.getDay()]+' '+fo.getDate()+' '+MESES[fo.getMonth()];
       const diasDesde=Math.round((fo-new Date(HOY_STR+'T12:00:00'))/(86400000));
@@ -2009,6 +2010,7 @@ function guardarRem(){
     productos:prods,parcial:anteriores.length>0,
     costoFlete};
   if(window._remFotoData) rem.foto=window._remFotoData;
+  if(rem.estado==='✅ Entregado'&&!rem.embarque) rem.embarque=HOY_STR; // entregada sin fecha de embarque → hoy
   DB.remisiones.unshift(rem);save();sincRemision(rem);
   // Descontar stock automáticamente
   descontarStockRemision(prods);
@@ -2683,6 +2685,7 @@ function guardarEditRem(){
   });
   // Solo el estado se aplica a la entrega específica
   rem.estado=document.getElementById('editEstado').value;
+  if(rem.estado==='✅ Entregado'&&!rem.embarque){ rem.embarque=HOY_STR; }
   save();
   cerrarEditRem();
   alert('✅ Remisión actualizada correctamente.');
@@ -3099,7 +3102,7 @@ function renderAgendaSemana(el){
   const diasBase=new Set();
   for(let i=0;i<14;i++){
     const d=new Date(HOY); d.setDate(d.getDate()+i);
-    diasBase.add(d.toISOString().split('T')[0]);
+    diasBase.add(fechaLocal(d));
   }
   // Agregar días futuros que tengan muestras aunque estén fuera de los 14 días
   (DB.muestras||[]).forEach(m=>{ if(m.fecha>=HOY_STR) diasBase.add(m.fecha); });
@@ -3112,7 +3115,7 @@ function renderAgendaSemana(el){
     totalPendientes+=pendientes.length;
     const pzas=piezasDia(dia);
     const esHoy=dia===HOY_STR;
-    const esMañana=dia===new Date(new Date(HOY).setDate(HOY.getDate()+1)).toISOString().split('T')[0];
+    const esMañana=dia===fechaLocal(new Date(new Date(HOY).setDate(HOY.getDate()+1)));
     const fechaObj=new Date(dia+'T12:00:00');
     const nomDia=DIAS_ES[fechaObj.getDay()]+' '+fechaObj.getDate()+' '+MESES_ES[fechaObj.getMonth()];
     const colorBarra=pzas>=MAX_PZAS_DIA?'#C0392B':pzas>=7?'#D35400':'#27AE60';
@@ -3237,7 +3240,7 @@ function generarReporteSemanal(){
   const dias=[];
   for(let i=0;i<7;i++){
     const d=new Date(HOY); d.setDate(d.getDate()+i);
-    dias.push(d.toISOString().split('T')[0]);
+    dias.push(fechaLocal(d));
   }
 
   const DIAS_ES=['Dom','Lun','Mar','Mié','Jue','Vie','Sáb'];
@@ -3796,9 +3799,11 @@ function verPartida(num){
 
 // ── REPORTE DIARIO ────────────────────────────────────────────────────────
 function getDatosRepDiario(dia){
-  // Entregas del día = remisiones con estado actualizado ese día
-  // Usamos fecha de la remisión para detectar entregados ese día
-  const entregas=(DB.remisiones||[]).filter(r=>r.fecha&&r.fecha.substring(0,10)===dia.substring(0,10));
+  // Embarques del día = remisiones cuya FECHA DE EMBARQUE es ese día.
+  // Si una remisión entregada no tiene fecha de embarque (registros viejos), se usa su fecha de remisión.
+  // Las pendientes sin fecha de embarque todavía no han salido, así que no aparecen.
+  const fechaEmb=r=>(r.embarque||(r.estado==='✅ Entregado'?r.fecha:'')||'').substring(0,10);
+  const entregas=(DB.remisiones||[]).filter(r=>fechaEmb(r)===dia.substring(0,10));
   const muestras=(DB.muestras||[]).filter(m=>m.fecha===dia);
   const mermas=(DB.mermas||[]).filter(m=>m.fecha&&m.fecha.substring(0,10)===dia.substring(0,10));
 
@@ -3828,9 +3833,10 @@ function renderRepFletera(){
   const el=document.getElementById('repFleteraContent');
   if(!el) return;
   const rems=(DB.remisiones||[]).filter(r=>{
-    const fe=(r.fechaEntrega||r.fecha||'');
+    // Se cuenta por FECHA DE EMBARQUE (día en que salió la unidad); si no tiene, por fecha de entrega o de remisión
+    const fe=(r.embarque||r.fechaEntrega||r.fecha||'');
     const esFletera=(r.flete||'').toLowerCase().includes('fletera')||r.flete==='🔵 Fletera';
-    return (fe.substring(0,10)===dia||( r.fecha&&r.fecha.substring(0,10)===dia)) && esFletera;
+    return fe.substring(0,10)===dia && esFletera;
   });
   if(!rems.length){
     el.innerHTML='<div style="text-align:center;color:#888;padding:14px;font-size:12px">Sin remisiones de fletera el '+dia+'</div>';
@@ -3858,9 +3864,9 @@ function renderRepFletera(){
 function reporteFleteraWhatsApp(){
   var dia=document.getElementById('repFletera').value||HOY_STR;
   var rems=(DB.remisiones||[]).filter(function(r){
-    var fe=(r.fechaEntrega||r.fecha||'');
+    var fe=(r.embarque||r.fechaEntrega||r.fecha||'');
     var esFletera=(r.flete||'').toLowerCase().indexOf('fletera')>=0||r.flete==='🔵 Fletera';
-    return (fe.substring(0,10)===dia||(r.fecha&&r.fecha.substring(0,10)===dia)) && esFletera;
+    return fe.substring(0,10)===dia && esFletera;
   });
   if(!rems.length){alert('Sin remisiones de fletera el '+dia);return;}
   var totalCajas=rems.reduce(function(a,r){return a+(r.productos||[]).reduce(function(b,p){return b+(p.hoy||p.cant||0);},0);},0);
@@ -3897,7 +3903,7 @@ function renderRepDiario(){
     const totalRems=(DB.remisiones||[]).length;
     el.innerHTML=`<div style="font-size:12px;color:#888;text-align:center;padding:14px;background:#F9F9F9;border-radius:10px">
       <div style="font-size:24px;margin-bottom:6px">📋</div>
-      <div style="font-weight:700;color:#555;margin-bottom:4px">Sin actividad el ${dia}</div>
+      <div style="font-weight:700;color:#555;margin-bottom:4px">Sin embarques el ${dia}</div>
       <div style="font-size:11px;color:#AAA">Total en sistema: ${totalRems} remisiones</div>
       <div style="font-size:11px;color:#AAA;margin-top:3px">Prueba otra fecha o verifica la conexión</div>
     </div>`;
@@ -3931,7 +3937,7 @@ function renderRepDiario(){
   }
 
   if(d.entregas.length){
-    html+=`<div style="margin-bottom:6px"><div style="font-size:11px;font-weight:700;color:#555;margin-bottom:4px">📦 Remisiones del día:</div>`;
+    html+=`<div style="margin-bottom:6px"><div style="font-size:11px;font-weight:700;color:#555;margin-bottom:4px">📦 Embarcado este día:</div>`;
     d.entregas.forEach(r=>{
       const cajas=r.productos.reduce((a,p)=>a+(p.hoy||p.cant||0),0);
       const color={'✅ Entregado':'#1E6B3C','📦 Lista para entregar':'#2E75B6','🔧 En preparación':'#D35400','📋 Pendiente':'#888'}[r.estado]||'#888';
@@ -3988,7 +3994,7 @@ function reporteDiarioWhatsApp(){
   let txt=`📦 *REPORTE DIARIO — TC DEL NORTE*\n`;
   txt+=`📅 ${nomDia}\n`;
   txt+=`─────────────────────────\n\n`;
-  txt+=`🚚 *ENTREGAS: ${d.entregas.length} remisiones · ${d.totalCajas} cajas*\n`;
+  txt+=`🚚 *EMBARCADO: ${d.entregas.length} remisiones · ${d.totalCajas} cajas*\n`;
   txt+=`✅ Confirmadas: ${d.confirmadas}\n\n`;
 
   if(d.topProds.length){
@@ -3998,7 +4004,7 @@ function reporteDiarioWhatsApp(){
   }
 
   if(d.entregas.length){
-    txt+=`📋 *DETALLE DE REMISIONES:*\n`;
+    txt+=`📋 *DETALLE DE LO EMBARCADO:*\n`;
     d.entregas.forEach(r=>{
       const cajas=r.productos.reduce((a,p)=>a+(p.hoy||p.cant||0),0);
       txt+=`  • ${r.cliente} · Rem.${r.num} · ${cajas} cj · ${r.estado}\n`;
@@ -4050,7 +4056,7 @@ function reporteDiarioImprimir(){
   ${d.topProds.length?`<h2>🏆 Productos más entregados</h2>
   <table><tr><th>#</th><th>SKU / Producto</th><th>Cajas entregadas</th></tr>
   ${d.topProds.map(([sku,cant],i)=>`<tr><td style="text-align:center">${i===0?'🥇':i===1?'🥈':'🥉'}</td><td>${sku}</td><td style="text-align:center;font-weight:700">${cant}</td></tr>`).join('')}</table>`:''}
-  ${d.entregas.length?`<h2>📋 Detalle de remisiones del día</h2>
+  ${d.entregas.length?`<h2>📋 Detalle de lo embarcado en el día</h2>
   <table><tr><th>Cliente</th><th>Rem.</th><th>Flete</th><th>Productos</th><th>Cajas</th><th>Estado</th></tr>
   ${d.entregas.map(r=>{const cj=r.productos.reduce((a,p)=>a+(p.hoy||p.cant||0),0);const prods=r.productos.filter(p=>(p.hoy||p.cant||0)>0).map(p=>'<span style="display:block;font-size:9px">'+p.sku+' <b>x'+(p.hoy||p.cant||0)+'</b></span>').join('');return'<tr><td><strong>'+r.cliente+'</strong></td><td style="text-align:center">'+r.num+'</td><td style="font-size:10px">'+(r.flete||'')+'</td><td>'+prods+'</td><td style="text-align:center;font-weight:700;color:#1E6B3C">'+cj+'</td><td style="text-align:center;font-size:10px">'+r.estado+'</td></tr>';}).join('')}</table>`:''}
   ${d.muestras.length?`<h2>🎁 Muestras del día (${d.muestras.length} · ${d.pzasMuestra} pzas)</h2>
@@ -4111,7 +4117,7 @@ function renderRepAtrasadas(){
 
 function getDiasSemana(){
   const dias=[];
-  for(let i=6;i>=0;i--){const d=new Date(HOY);d.setDate(d.getDate()-i);dias.push(d.toISOString().split('T')[0]);}
+  for(let i=6;i>=0;i--){const d=new Date(HOY);d.setDate(d.getDate()-i);dias.push(fechaLocal(d));}
   return dias;
 }
 function datosReporteSemanal(){
@@ -4572,7 +4578,7 @@ function borrarDatosPrueba(){
 }
 
 function descargarRespaldo(){
-  const fecha=new Date().toISOString().split('T')[0];
+  const fecha=fechaLocal(new Date());
   const datos=JSON.stringify(DB, null, 2);
   const blob=new Blob([datos],{type:'application/json'});
   const url=URL.createObjectURL(blob);
