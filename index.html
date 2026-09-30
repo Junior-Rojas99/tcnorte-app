@@ -991,9 +991,17 @@ let DB = JSON.parse(localStorage.getItem('prc_db2') || JSON.stringify({
 
 const GS_URL = 'https://script.google.com/macros/s/AKfycbyfdw_0VIFyDBIdFike5Fv0bGpJs2Zjri3h98MEaio_XCSB3Cu3fg0m5pzqP7cvFaVc/exec';
 
-// ── FIREBASE SYNC ─────────────────────────────────────────────────────────
+// ── FIREBASE SYNC (v2: combina cambios en lugar de reemplazar) ────────────
+// Cada dispositivo guarda una "base": la última copia que vio del servidor.
+// Al guardar se calcula SOLO lo que este dispositivo cambió contra esa base
+// y se aplica sobre lo que hay HOY en el servidor. Así un celular que se quedó
+// sin internet ya no puede borrar lo que capturaron los demás.
 let fbEscuchando = false;
 let guardadoPendiente = false;
+const BASE_KEY = 'prc_base2';
+const SYNC_COLS = {remisiones:'id', muestras:'id', mermas:'id', devoluciones:'id', torton:'id', inventario:'sku'};
+let DB_BASE = (()=>{ try{ return JSON.parse(localStorage.getItem(BASE_KEY)||'null'); }catch(e){ return null; } })();
+let syncEnCurso = false, syncOtraVez = false;
 
 function normalizarDB(d){
   // Garantiza que DB siempre tenga todos los campos necesarios
@@ -1009,102 +1017,164 @@ function normalizarDB(d){
   return d;
 }
 
+function _clon(o){ return JSON.parse(JSON.stringify(o)); }
+function _llave(x,k){ return (x && typeof x==='object' && x[k]!=null) ? 'k:'+String(x[k]) : 'j:'+JSON.stringify(x); }
+function _mapa(arr,k){ const m=new Map(); (arr||[]).forEach(x=>m.set(_llave(x,k),x)); return m; }
+
+function calcularCambios(local, base){
+  const ch={cols:{}, fact:{up:[],del:[]}, otros:{}};
+  for(const col in SYNC_COLS){
+    const k=SYNC_COLS[col], L=_mapa(local[col],k), B=_mapa(base[col],k), up=[], del=[];
+    L.forEach((v,kk)=>{ const b=B.get(kk); if(b===undefined || JSON.stringify(b)!==JSON.stringify(v)) up.push([kk,v]); });
+    B.forEach((v,kk)=>{ if(!L.has(kk)) del.push(kk); });
+    ch.cols[col]={up,del};
+  }
+  const Lf=local.facturadas||{}, Bf=base.facturadas||{};
+  Object.keys(Lf).forEach(x=>{ if(JSON.stringify(Lf[x])!==JSON.stringify(Bf[x])) ch.fact.up.push([x,Lf[x]]); });
+  Object.keys(Bf).forEach(x=>{ if(!(x in Lf)) ch.fact.del.push(x); });
+  new Set([...Object.keys(local),...Object.keys(base)]).forEach(x=>{
+    if(x in SYNC_COLS || x==='facturadas') return;
+    if(JSON.stringify(local[x])!==JSON.stringify(base[x])) ch.otros[x]=(x in local)?local[x]:undefined;
+  });
+  return ch;
+}
+
+function hayCambios(ch){
+  for(const col in ch.cols){ if(ch.cols[col].up.length||ch.cols[col].del.length) return true; }
+  return ch.fact.up.length>0 || ch.fact.del.length>0 || Object.keys(ch.otros).length>0;
+}
+
+function aplicarCambios(server, ch){
+  const s=normalizarDB(_clon(server||{}));
+  for(const col in ch.cols){
+    const {up,del}=ch.cols[col]; if(!up.length && !del.length) continue;
+    const k=SYNC_COLS[col], arr=s[col], pos=new Map(arr.map((x,i)=>[_llave(x,k),i])), nuevos=[];
+    up.forEach(([kk,v])=>{ if(pos.has(kk)) arr[pos.get(kk)]=v; else nuevos.push(v); });
+    const borrar=new Set(del);
+    s[col]=[...nuevos, ...arr].filter(x=>!borrar.has(_llave(x,SYNC_COLS[col])));
+  }
+  ch.fact.up.forEach(([x,v])=>{ s.facturadas[x]=v; });
+  ch.fact.del.forEach(x=>{ delete s.facturadas[x]; });
+  Object.keys(ch.otros).forEach(x=>{ if(ch.otros[x]===undefined) delete s[x]; else s[x]=ch.otros[x]; });
+  return normalizarDB(s);
+}
+
+// Primer uso en un dispositivo (todavía no tiene base): solo se suben los registros
+// NUEVOS de los últimos 3 días que el servidor no tiene. Nada se borra ni se sobreescribe.
+function cambiosPrimerUso(local, server){
+  const ch=calcularCambios(local, server), limite=Date.now()-3*24*60*60*1000;
+  for(const col in ch.cols){
+    const S=_mapa(server[col],SYNC_COLS[col]);
+    ch.cols[col]={up:ch.cols[col].up.filter(([kk,v])=>!S.has(kk) && Number(v&&v.id)>limite), del:[]};
+  }
+  ch.fact={up:ch.fact.up.filter(([x])=>!(x in (server.facturadas||{}))), del:[]};
+  ch.otros={};
+  return ch;
+}
+
+function _guardarLocal(){
+  try{ localStorage.setItem('prc_db2', JSON.stringify(DB)); }catch(e){ console.warn('No se pudo guardar local:', e); }
+  try{ if(DB_BASE) localStorage.setItem(BASE_KEY, JSON.stringify(DB_BASE)); }catch(e){ console.warn('No se pudo guardar base:', e); }
+}
+
+function _refrescarPantalla(){
+  try{ const s=document.getElementById('scr-hoy'); if(!s || s.classList.contains('active')) renderHoy(); }catch(e){}
+}
+
 function save(){
   DB = normalizarDB(DB);
-  localStorage.setItem('prc_db2', JSON.stringify(DB));
+  _guardarLocal();
   sincFirebase();
 }
 
+// Sincroniza con el servidor: baja lo nuevo de los demás y sube lo propio, combinándolo.
+// Devuelve true si se pudo hablar con el servidor.
 async function sincFirebase(){
-  // PROTECCIÓN: nunca subir si no hay remisiones — evita borrar datos reales
-  const rems=(DB.remisiones||[]).length;
-  if(rems===0){
-    console.warn('sincFirebase bloqueado: no hay remisiones, no se sube nada');
-    return;
+  if(syncEnCurso){ syncOtraVez=true; return true; }
+  syncEnCurso=true;
+  let ok=false;
+  try{
+    for(let intento=0; intento<6; intento++){
+      const res=await fetch(`${FIREBASE_URL}${FIREBASE_PATH}.json`, {headers:{'X-Firebase-ETag':'true'}, cache:'no-store'});
+      if(!res.ok) throw new Error('HTTP '+res.status);
+      const etag=res.headers.get('ETag');
+      const server=normalizarDB((await res.json())||{});
+      const foto=_clon(normalizarDB(DB));
+      const ch=DB_BASE ? calcularCambios(foto, normalizarDB(_clon(DB_BASE))) : cambiosPrimerUso(foto, server);
+      let final=server;
+      if(hayCambios(ch)){
+        final=aplicarCambios(server, ch);
+        // PROTECCIÓN: nunca dejar el servidor sin remisiones
+        if(final.remisiones.length===0 && server.remisiones.length>0){
+          console.warn('sincFirebase bloqueado: el resultado quedaría sin remisiones');
+          mostrarSyncBanner('⚠️ No se subió: el cambio borraría todas las remisiones', '#FDEDEC', '#C0392B');
+          ok=true; break;
+        }
+        const put=await fetch(`${FIREBASE_URL}${FIREBASE_PATH}.json`, {
+          method:'PUT',
+          headers:{'Content-Type':'application/json', ...(etag?{'if-match':etag}:{})},
+          body:JSON.stringify(final)
+        });
+        if(put.status===412){ await new Promise(r=>setTimeout(r,400+Math.random()*800)); continue; } // otro dispositivo guardó al mismo tiempo: reintentar
+        if(!put.ok) throw new Error('HTTP '+put.status);
+        mostrarSyncBanner('✅ Guardado correctamente', '#EAFAF1', '#1E6B3C');
+      }
+      // Cambios que el usuario hizo MIENTRAS se sincronizaba: se conservan y se suben en la siguiente vuelta
+      const durante=calcularCambios(normalizarDB(DB), foto);
+      const antes=JSON.stringify(foto);
+      DB_BASE=_clon(final);
+      DB=hayCambios(durante) ? aplicarCambios(final, durante) : _clon(final);
+      if(hayCambios(durante)) syncOtraVez=true;
+      _guardarLocal();
+      guardadoPendiente=false; ok=true;
+      if(JSON.stringify(final)!==antes) _refrescarPantalla();
+      respaldoDiario(final);
+      break;
+    }
+    if(!ok) throw new Error('No se pudo guardar después de varios intentos');
+  }catch(e){
+    guardadoPendiente=true;
+    mostrarSyncBanner('📵 Sin internet — guardado en celular, se sube solo al volver la señal', '#FEF5EC', '#784212');
+    console.warn('Firebase sync error:', e);
+  }finally{
+    syncEnCurso=false;
+    if(syncOtraVez){ syncOtraVez=false; setTimeout(sincFirebase, 300); }
   }
-
-  try {
-    const res = await fetch(`${FIREBASE_URL}${FIREBASE_PATH}.json`, {
-      method: 'PUT',
-      headers: {'Content-Type': 'application/json'},
-      body: JSON.stringify(DB)
-    });
-    if(!res.ok) throw new Error('HTTP '+res.status);
-    mostrarSyncBanner('✅ Guardado correctamente', '#EAFAF1', '#1E6B3C');
-    guardadoPendiente = false;
-  } catch(e) {
-    guardadoPendiente = true;
-    mostrarSyncBanner('📵 Sin internet — guardado en celular', '#FEF5EC', '#784212');
-    console.warn('Firebase save error:', e);
-  }
+  return ok;
 }
 
-
+// Respaldo automático: una copia por día en /tcnorte_respaldos/AAAA-MM-DD (se guardan los últimos 365 días)
+async function respaldoDiario(datos){
+  try{
+    const dia=HOY_STR;
+    if(localStorage.getItem('ult_respaldo')===dia) return;
+    if(!datos || !datos.remisiones || !datos.remisiones.length) return;
+    const url=`${FIREBASE_URL}/tcnorte_respaldos/${dia}.json`;
+    const ya=await fetch(url+'?shallow=true',{cache:'no-store'}).then(r=>r.json());
+    if(!ya){
+      await fetch(url,{method:'PUT',headers:{'Content-Type':'application/json'},body:JSON.stringify(datos)});
+      const lista=await fetch(`${FIREBASE_URL}/tcnorte_respaldos.json?shallow=true`,{cache:'no-store'}).then(r=>r.json())||{};
+      const dias=Object.keys(lista).sort();
+      const limite=fechaLocal(new Date(Date.now()-365*24*60*60*1000));
+      for(const d of dias){ if(d<limite) await fetch(`${FIREBASE_URL}/tcnorte_respaldos/${d}.json`,{method:'DELETE'}); }
+    }
+    localStorage.setItem('ult_respaldo', dia);
+  }catch(e){ console.warn('Respaldo diario no disponible:', e); }
+}
 
 async function cargarDesdeFirebase(){
-  try {
-    const res = await fetch(`${FIREBASE_URL}${FIREBASE_PATH}.json`);
-    if(!res.ok) throw new Error('HTTP '+res.status);
-    const datos = await res.json();
-    if(datos && typeof datos === 'object'){
-      const remLocal = (DB.remisiones||[]).length;
-      const remFirebase = Array.isArray(datos.remisiones) ? datos.remisiones.length : 0;
-      if(remFirebase >= remLocal){
-        // Firebase tiene igual o más — usar Firebase
-        DB = normalizarDB(datos);
-        localStorage.setItem('prc_db2', JSON.stringify(DB));
-        mostrarSyncBanner('🔄 Datos cargados desde servidor', '#EBF5FB', '#1A5276');
-      } else if(remLocal > 0){
-        // Celular tiene más — subir el celular a Firebase
-        await sincFirebase();
-        mostrarSyncBanner('☁️ Datos locales subidos al servidor', '#EBF5FB', '#1A5276');
-      }
-      return true;
-    } else {
-      // Firebase vacío — solo subir si tenemos datos locales reales
-      if((DB.remisiones||[]).length > 0){
-        await sincFirebase();
-      }
-      return true;
-    }
-  } catch(e) {
-    console.warn('Sin conexión, usando datos del celular:', e);
-    mostrarSyncBanner('📵 Sin internet — usando datos del celular', '#FEF5EC', '#784212');
-  }
-  return false;
+  const ok=await sincFirebase();
+  if(ok) mostrarSyncBanner('🔄 Datos al día con el servidor', '#EBF5FB', '#1A5276');
+  else mostrarSyncBanner('📵 Sin internet — usando datos del celular', '#FEF5EC', '#784212');
+  return ok;
 }
 
 function escucharFirebase(){
   if(fbEscuchando) return;
   fbEscuchando = true;
-  setInterval(async ()=>{
-    // Si hay guardado pendiente, intentar resubir
-    if(guardadoPendiente){
-      sincFirebase();
-      return;
-    }
-    try {
-      const res = await fetch(`${FIREBASE_URL}${FIREBASE_PATH}.json`);
-      if(!res.ok) return;
-      const datos = await res.json();
-      if(datos && typeof datos === 'object'){
-        const remAntes = (DB.remisiones||[]).length;
-        const remNuevo = Array.isArray(datos.remisiones) ? datos.remisiones.length : 0;
-        // Solo actualizar si Firebase tiene MÁS remisiones — nunca sobreescribir con menos
-        if(remNuevo >= remAntes){
-          DB = normalizarDB(datos);
-          localStorage.setItem('prc_db2', JSON.stringify(DB));
-          if(remNuevo > remAntes){
-            renderHoy();
-            mostrarSyncBanner('🔄 Datos actualizados', '#EBF5FB', '#1A5276');
-          }
-        } else if(remAntes > remNuevo && remAntes > 0){
-          // Celular tiene más — subir a Firebase para proteger los datos
-          sincFirebase();
-        }
-      }
-    } catch(e){ console.warn('Poll error:', e); }
-  }, 15000);
+  // Cada 15 s: baja lo que capturaron los demás y sube lo pendiente de este dispositivo
+  setInterval(()=>{ if(!syncEnCurso) sincFirebase(); }, 15000);
+  window.addEventListener('online', ()=>sincFirebase());
 }
 
 async function subirTodoASheets(){
