@@ -1072,6 +1072,13 @@ function cambiosPrimerUso(local, server){
   return ch;
 }
 
+// Firebase no acepta llaves con . # $ / [ ] — se reemplazan por _ para que un dato raro no bloquee todos los guardados
+function _llavesSeguras(o){
+  if(Array.isArray(o)) return o.map(_llavesSeguras);
+  if(o && typeof o==='object'){ const n={}; for(const k in o){ const kk=String(k).replace(/[.#$\/\[\]]/g,'_')||'_'; n[kk]=_llavesSeguras(o[k]); } return n; }
+  return o;
+}
+
 function _guardarLocal(){
   try{ localStorage.setItem('prc_db2', JSON.stringify(DB)); }catch(e){ console.warn('No se pudo guardar local:', e); }
   try{ if(DB_BASE) localStorage.setItem(BASE_KEY, JSON.stringify(DB_BASE)); }catch(e){ console.warn('No se pudo guardar base:', e); }
@@ -1113,15 +1120,25 @@ async function sincFirebase(){
         const put=await fetch(`${FIREBASE_URL}${FIREBASE_PATH}.json`, {
           method:'PUT',
           headers:{'Content-Type':'application/json', ...(etag?{'if-match':etag}:{})},
-          body:JSON.stringify(final)
+          body:JSON.stringify(_llavesSeguras(final))
         });
         if(put.status===412){ await new Promise(r=>setTimeout(r,400+Math.random()*800)); continue; } // otro dispositivo guardó al mismo tiempo: reintentar
-        if(!put.ok) throw new Error('HTTP '+put.status);
+        if(!put.ok){
+          if(put.status===400){
+            // El servidor rechazó los datos (no es falta de internet): al menos mostrar lo que hay en el servidor
+            console.warn('Firebase rechazó el guardado (400). Se muestran datos del servidor y se conservan los cambios locales.');
+            DB=aplicarCambios(server, ch); DB_BASE=_clon(server); _guardarLocal(); _refrescarPantalla();
+            mostrarSyncBanner('⚠️ No se pudo guardar un cambio. Avisa a Miguel.', '#FDEDEC', '#C0392B');
+            guardadoPendiente=true; ok=true; break;
+          }
+          throw new Error('HTTP '+put.status);
+        }
         mostrarSyncBanner('✅ Guardado correctamente', '#EAFAF1', '#1E6B3C');
       }
       // Cambios que el usuario hizo MIENTRAS se sincronizaba: se conservan y se suben en la siguiente vuelta
       const durante=calcularCambios(normalizarDB(DB), foto);
       const antes=JSON.stringify(foto);
+      final=_llavesSeguras(final);
       DB_BASE=_clon(final);
       DB=hayCambios(durante) ? aplicarCambios(final, durante) : _clon(final);
       if(hayCambios(durante)) syncOtraVez=true;
@@ -2202,6 +2219,7 @@ function guardarNuevoProducto(){
   const stock=parseInt(document.getElementById('nuevStock').value)||0;
   const min=parseInt(document.getElementById('nuevMin').value)||5;
   if(!sku){alert('El SKU es obligatorio.');return;}
+  if(/[.#$\/\[\]]/.test(sku)){alert('⚠️ El SKU no puede llevar punto ni estos caracteres: . # $ / [ ]\nEjemplo: en lugar de 11.7 usa 117MM.');return;}
   if(!nom){alert('El nombre es obligatorio.');return;}
   // Verificar si ya existe en catálogo
   const existe=CATALOGO.find(p=>p.sku===sku);
