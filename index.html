@@ -560,6 +560,10 @@ body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;backgrou
         <option value="❌ No entregado">❌ No entregado</option>
       </select>
     </div>
+    <div class="field" id="editTonosBox"><label>🎨 Tono por producto</label>
+      <div style="font-size:11px;color:#888;margin-bottom:6px">Anota el tono que salió de cada producto (opcional).</div>
+      <div id="editTonos"></div>
+    </div>
     <div class="field"><label>Observaciones</label><textarea id="editObs" rows="2"></textarea></div>
 
     <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-top:8px">
@@ -582,6 +586,14 @@ body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;backgrou
     </div>
   </div>
   <div id="buscarRemResultado"></div>
+  <div class="card" style="padding:10px 14px;margin:6px 0 10px;border-left:4px solid #8E44AD">
+    <div style="font-size:13px;font-weight:700;color:#6C3483;margin-bottom:6px">🎨 Tonos enviados</div>
+    <div style="font-size:11px;color:#888;margin-bottom:6px">Busca por producto, cliente o tono para ver qué tono se mandó y a quién.</div>
+    <input id="buscarTonoInput" placeholder="Ej. TC6012A0620, Pisos Lara o 12A..."
+      style="width:100%;font-size:14px;padding:9px 12px;border-radius:9px;border:1px solid #DDD;outline:none"
+      oninput="buscarTonos(this.value)">
+    <div id="buscarTonoResultado" style="margin-top:8px"></div>
+  </div>
   <button class="btn-sec" onclick="showSub('mas')" style="margin:4px 0 12px">‹ Volver</button>
 </div>
 
@@ -1938,8 +1950,12 @@ function selCliente(c){
 }
 document.addEventListener('click',()=>{ const sg=document.getElementById('clienteSug'); if(sg) sg.style.display='none'; });
 
+// ── TONOS ─────────────────────────────────────────────────────────────────
+function escAttr(v){ return String(v==null?'':v).replace(/&/g,'&amp;').replace(/"/g,'&quot;').replace(/</g,'&lt;').replace(/>/g,'&gt;'); }
+function tonoTag(p){ return p&&p.tono?' <span style="display:inline-block;background:#F4ECF7;color:#6C3483;border-radius:6px;padding:0 5px;font-size:10px;font-weight:700">🎨 '+escAttr(p.tono)+'</span>':''; }
+
 // ── PRODUCTOS CON BÚSQUEDA RÁPIDA ─────────────────────────────────────────
-function addProd(s='',total='',hoy=''){
+function addProd(s='',total='',hoy='',tono=''){
   prodCount++;const id=prodCount;
   const d=document.createElement('div');
   d.id='pr-'+id;d.style.cssText='margin-bottom:8px;position:relative';
@@ -1952,6 +1968,8 @@ function addProd(s='',total='',hoy=''){
           onfocus="buscarProd(this,'sug-${id}')">
         <div id="sug-${id}" style="display:none;position:absolute;top:100%;left:0;right:0;background:#fff;border:1px solid #DDD;border-radius:9px;z-index:99;box-shadow:0 4px 16px rgba(0,0,0,.12);max-height:200px;overflow-y:auto"></div>
       </div>
+      <input type="text" class="inp-tono" placeholder="Tono" value="${escAttr(tono)}" maxlength="20" title="Tono del piso (opcional)"
+        style="width:64px;font-size:13px;padding:8px 4px;border-radius:9px;border:1.5px solid #C39BD3;text-align:center;color:#6C3483;font-weight:600">
       <input type="number" placeholder="Cant." value="${hoy||''}" min="0"
         style="width:62px;font-size:15px;font-weight:700;padding:8px 4px;border-radius:9px;border:2px solid #1F3864;text-align:center">
       <button onclick="document.getElementById('pr-${id}').remove()" style="background:none;border:none;cursor:pointer;font-size:18px;color:#CCC;padding:4px">🗑</button>
@@ -2055,7 +2073,8 @@ function guardarRem(){
     if(!textos.length||!numeros.length) return;
     const s=textos[0].value.trim();
     const cant=parseInt(numeros[0].value)||0;
-    if(s) prods.push({sku:s,total:cant,hoy:cant,saldo:0});
+    const tono=((row.querySelector('.inp-tono')||{}).value||'').trim();
+    if(s){ const p={sku:s,total:cant,hoy:cant,saldo:0}; if(tono) p.tono=tono; prods.push(p); }
   });
 
   // ── Verificar saldo vs entregas anteriores ──
@@ -2740,6 +2759,11 @@ function editarRemision(num){
   document.getElementById('editChofer').value=rem.chofer||'';
   document.getElementById('editEstado').value=rem.estado||'📋 Pendiente';
   document.getElementById('editObs').value=rem.obs||'';
+  document.getElementById('editTonos').innerHTML=(rem.productos||[]).map((p,i)=>
+    `<div style="display:flex;gap:6px;align-items:center;margin-bottom:5px">
+      <span style="flex:1;font-size:12px;font-weight:600;color:#333">${escAttr(p.sku)} <span style="color:#888;font-weight:400">×${p.hoy||p.cant||0}</span></span>
+      <input class="edit-tono" data-i="${i}" value="${escAttr(p.tono||'')}" placeholder="Tono" maxlength="20" style="width:96px;font-size:13px;padding:6px;border-radius:8px;border:1.5px solid #C39BD3;text-align:center;color:#6C3483;font-weight:600">
+    </div>`).join('')||'<div style="font-size:12px;color:#AAA">Sin productos</div>';
   toggleEditDestino();
   document.getElementById('editRemModal').style.display='flex';
 }
@@ -2774,13 +2798,39 @@ function guardarEditRem(){
   // Solo el estado se aplica a la entrega específica
   rem.estado=document.getElementById('editEstado').value;
   if(rem.estado==='✅ Entregado'&&!rem.embarque){ rem.embarque=HOY_STR; }
+  // Tonos de esta entrega
+  document.querySelectorAll('#editTonos .edit-tono').forEach(inp=>{
+    const p=(rem.productos||[])[+inp.dataset.i]; if(!p) return;
+    const v=inp.value.trim(); if(v) p.tono=v; else delete p.tono;
+  });
   save();
   cerrarEditRem();
   alert('✅ Remisión actualizada correctamente.');
   const inp=document.getElementById('buscarRemInput');
   if(inp&&inp.value) buscarRemision(inp.value);
   renderHoy();
-  alert('✅ Remisión actualizada correctamente.');
+}
+
+function buscarTonos(q){
+  const el=document.getElementById('buscarTonoResultado'); if(!el) return;
+  q=String(q||'').trim().toUpperCase();
+  if(q.length<2){el.innerHTML='';return;}
+  const nombre=sku=>{const c=(typeof buscarCatalogo==='function')?buscarCatalogo(sku).find(x=>x.sku===sku):null;return c?c.nom:'';};
+  const filas=[];
+  (DB.remisiones||[]).forEach(r=>(r.productos||[]).forEach(p=>{
+    if(!p.tono) return;
+    const nom=nombre(p.sku);
+    const txt=(p.sku+' '+nom+' '+(r.cliente||'')+' '+p.tono+' '+r.num).toUpperCase();
+    if(txt.indexOf(q)<0) return;
+    filas.push({f:(r.embarque||r.fecha||''),num:r.num,cli:r.cliente||'',sku:p.sku,nom,tono:p.tono,cj:p.hoy||p.cant||0,est:r.estado||''});
+  }));
+  filas.sort((a,b)=>String(b.f).localeCompare(String(a.f)));
+  if(!filas.length){el.innerHTML='<div style="font-size:12px;color:#AAA">No hay tonos registrados con esa búsqueda.</div>';return;}
+  el.innerHTML='<div style="font-size:11px;color:#888;margin-bottom:4px">'+filas.length+' registro'+(filas.length!==1?'s':'')+(filas.length>60?' (se muestran los 60 más recientes)':'')+'</div>'
+    +filas.slice(0,60).map(x=>'<div style="font-size:12px;padding:6px 0;border-bottom:0.5px solid #F0F0F0">'
+      +'<div style="display:flex;justify-content:space-between"><span><strong>'+escAttr(x.sku)+'</strong>'+tonoTag({tono:x.tono})+'</span><span style="font-weight:700;color:#1F3864">'+x.cj+' cj</span></div>'
+      +(x.nom?'<div style="font-size:10px;color:#888">'+escAttr(x.nom)+'</div>':'')
+      +'<div style="font-size:11px;color:#555">Rem. '+escAttr(x.num)+' · '+escAttr(x.cli)+' · '+escAttr(x.f)+'</div></div>').join('');
 }
 
 function cerrarEditRem(){
@@ -2818,9 +2868,10 @@ function buscarRemision(q){
     // Calcular saldo por producto
     const mapaProds={};
     entregas.forEach(r=>r.productos.forEach(p=>{
-      if(!mapaProds[p.sku]) mapaProds[p.sku]={total:0,entregado:0};
+      if(!mapaProds[p.sku]) mapaProds[p.sku]={total:0,entregado:0,tonos:[]};
       mapaProds[p.sku].total=Math.max(mapaProds[p.sku].total,p.total||p.hoy||0);
       mapaProds[p.sku].entregado+=(p.hoy||p.cant||0);
+      if(p.tono&&!mapaProds[p.sku].tonos.includes(p.tono)) mapaProds[p.sku].tonos.push(p.tono);
     }));
     const haySaldo=Object.values(mapaProds).some(p=>p.total>0&&p.entregado<p.total);
     const confirmadas=entregas.filter(r=>r.estado==='✅ Entregado').length;
@@ -2856,7 +2907,7 @@ function buscarRemision(q){
         const color=saldo===0?'#27AE60':'#D35400';
         return`<div style="margin-bottom:6px">
           <div style="display:flex;justify-content:space-between;font-size:12px;margin-bottom:2px">
-            <span style="font-weight:600;color:#333">${sku}</span>
+            <span style="font-weight:600;color:#333">${sku}${d.tonos&&d.tonos.length?tonoTag({tono:d.tonos.join(', ')}):''}</span>
             <span style="font-weight:700;color:${color}">${saldo===0?'✅ Completo':'⏳ Faltan '+saldo+' cajas'}</span>
           </div>
           <div style="display:flex;gap:4px;font-size:10px;color:#888;margin-bottom:3px">
@@ -3939,7 +3990,7 @@ function renderRepFletera(){
     +'</div>';
   rems.forEach(r=>{
     const cajas=(r.productos||[]).reduce((a,p)=>a+(p.hoy||p.cant||0),0);
-    const prods=(r.productos||[]).map(p=>p.sku+'×'+(p.hoy||p.cant||0)).join(' | ');
+    const prods=(r.productos||[]).map(p=>p.sku+'×'+(p.hoy||p.cant||0)+(p.tono?' (tono '+escAttr(p.tono)+')':'')).join(' | ');
     html+='<div style="font-size:11px;padding:7px 0;border-bottom:0.5px solid #D6EAF8">'
       +'<div style="display:flex;justify-content:space-between"><strong>'+r.cliente+'</strong><span style="color:#1A5276;font-weight:700">'+cajas+' cj'+(r.costoFlete?' · $'+Number(r.costoFlete).toLocaleString('es-MX',{minimumFractionDigits:2}):'')+'</span></div>'
       +'<div style="color:#888;margin-top:2px">Rem. '+r.num+(r.dir?' · '+r.dir:'')+'</div>'
@@ -4146,7 +4197,7 @@ function reporteDiarioImprimir(){
   ${d.topProds.map(([sku,cant],i)=>`<tr><td style="text-align:center">${i===0?'🥇':i===1?'🥈':'🥉'}</td><td>${sku}</td><td style="text-align:center;font-weight:700">${cant}</td></tr>`).join('')}</table>`:''}
   ${d.entregas.length?`<h2>📋 Detalle de lo embarcado en el día</h2>
   <table><tr><th>Cliente</th><th>Rem.</th><th>Flete</th><th>Productos</th><th>Cajas</th><th>Estado</th></tr>
-  ${d.entregas.map(r=>{const cj=r.productos.reduce((a,p)=>a+(p.hoy||p.cant||0),0);const prods=r.productos.filter(p=>(p.hoy||p.cant||0)>0).map(p=>'<span style="display:block;font-size:9px">'+p.sku+' <b>x'+(p.hoy||p.cant||0)+'</b></span>').join('');return'<tr><td><strong>'+r.cliente+'</strong></td><td style="text-align:center">'+r.num+'</td><td style="font-size:10px">'+(r.flete||'')+'</td><td>'+prods+'</td><td style="text-align:center;font-weight:700;color:#1E6B3C">'+cj+'</td><td style="text-align:center;font-size:10px">'+r.estado+'</td></tr>';}).join('')}</table>`:''}
+  ${d.entregas.map(r=>{const cj=r.productos.reduce((a,p)=>a+(p.hoy||p.cant||0),0);const prods=r.productos.filter(p=>(p.hoy||p.cant||0)>0).map(p=>'<span style="display:block;font-size:9px">'+p.sku+' <b>x'+(p.hoy||p.cant||0)+'</b>'+(p.tono?' · Tono '+escAttr(p.tono):'')+'</span>').join('');return'<tr><td><strong>'+r.cliente+'</strong></td><td style="text-align:center">'+r.num+'</td><td style="font-size:10px">'+(r.flete||'')+'</td><td>'+prods+'</td><td style="text-align:center;font-weight:700;color:#1E6B3C">'+cj+'</td><td style="text-align:center;font-size:10px">'+r.estado+'</td></tr>';}).join('')}</table>`:''}
   ${d.muestras.length?`<h2>🎁 Muestras del día (${d.muestras.length} · ${d.pzasMuestra} pzas)</h2>
   <table><tr><th>Cliente</th><th>Vendedor</th><th>Productos</th><th>Piezas</th></tr>
   ${d.muestras.map(m=>`<tr><td>${m.cliente}</td><td>${m.vendedor||'—'}</td><td style="font-size:11px">${m.productos.map(p=>p.sku+' ×'+p.cant).join(', ')}</td><td style="text-align:center;font-weight:700">${m.productos.reduce((a,p)=>a+p.cant,0)}</td></tr>`).join('')}</table>`:''}
