@@ -3860,7 +3860,7 @@ function verPartida(num){
   todasEntregas.forEach(r=>{
     r.productos.forEach(p=>{
       if(!mapaProds[p.sku]) mapaProds[p.sku]={nom:p.sku,entregas:[]};
-      mapaProds[p.sku].entregas.push({fecha:r.fecha,hoy:p.hoy||p.cant||0,total:p.total||0,estado:r.estado,flete:r.flete,chofer:r.chofer||''});
+      mapaProds[p.sku].entregas.push({fecha:r.fecha,hoy:p.hoy||p.cant||0,total:p.total||0,estado:r.estado,flete:r.flete,chofer:r.chofer||'',tono:p.tono||''});
     });
   });
 
@@ -3894,7 +3894,7 @@ function verPartida(num){
     const colorBarra=saldo===0?'#27AE60':'#D35400';
     html+=`<div style="padding:10px 0;border-bottom:0.5px solid #F0F0F0">
       <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:6px">
-        <span style="font-size:13px;font-weight:700;color:#1F3864">${sku}</span>
+        <span style="font-size:13px;font-weight:700;color:#1F3864">${sku}${(()=>{const t=[...new Set(data.entregas.map(e=>e.tono).filter(Boolean))];return t.length?tonoTag({tono:t.join(', ')}):'';})()}</span>
         <span style="font-size:11px;font-weight:700;padding:3px 10px;border-radius:20px;background:${saldo===0?'#EAFAF1':'#FEF5EC'};color:${saldo===0?'#1E6B3C':'#784212'};border:1px solid ${saldo===0?'#A9DFBF':'#FAD7A0'}">${saldo===0?'✅ Completo':'⏳ Faltan '+saldo+' cajas'}</span>
       </div>
       <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:6px;margin-bottom:7px;text-align:center">
@@ -3907,7 +3907,7 @@ function verPartida(num){
       const colorE=e.estado==='✅ Entregado'?'#1E6B3C':e.estado==='⏳ En ruta'?'#D35400':'#C0392B';
       html+=`<div style="display:flex;justify-content:space-between;align-items:center;padding:4px 0 4px 10px;border-left:3px solid ${colorE};margin-bottom:3px">
         <div><div style="font-size:12px;font-weight:600;color:#333">Entrega ${i+1} · ${e.fecha}</div>
-        <div style="font-size:11px;color:#888;margin-top:1px">${e.flete}${e.chofer?' · '+e.chofer:''}</div></div>
+        <div style="font-size:11px;color:#888;margin-top:1px">${e.flete}${e.chofer?' · '+e.chofer:''}${tonoTag(e)}</div></div>
         <div style="text-align:right"><div style="font-size:14px;font-weight:700;color:#1F3864">${e.hoy} cajas</div>
         <div style="font-size:10px;font-weight:600;color:${colorE}">${e.estado}</div></div>
       </div>`;
@@ -3928,7 +3928,7 @@ function verPartida(num){
         <span style="font-size:11px;font-weight:700;color:${colorEstado}">${r.estado}</span>
       </div>
       <div class="li-sub">${r.flete}${r.chofer?' · '+r.chofer:''} · ${r.productos.length} prod.</div>
-      <div style="font-size:11px;color:#AAA;margin-top:2px">${r.productos.map(p=>p.sku+' ×'+p.cant).join(' · ')}</div>
+      <div style="font-size:11px;color:#AAA;margin-top:2px">${r.productos.map(p=>p.sku+' ×'+(p.hoy||p.cant||0)+(p.tono?' · Tono '+escAttr(p.tono):'')).join(' · ')}</div>
     </div>`;
   });
   html+='</div>';
