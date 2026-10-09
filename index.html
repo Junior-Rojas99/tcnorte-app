@@ -877,6 +877,25 @@ body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;backgrou
     <button class="btn-main btn-red2" onclick="guardarMerma()">✓ Guardar merma</button>
     <button class="btn-sec" onclick="showSub('mas')">‹ Volver</button>
   </div>
+  <div class="card" id="mermaDescarga" style="margin-top:10px;border-left:4px solid #C0392B">
+    <div class="card-title">⬇️ Descargar mermas</div>
+    <div style="font-size:11px;color:#888;margin-bottom:6px">Elige el rango de fechas (vacío = todas) y descarga en Excel o en PDF.</div>
+    <div class="row2">
+      <div class="field"><label>Desde</label><input type="date" id="meDesde"></div>
+      <div class="field"><label>Hasta</label><input type="date" id="meHasta"></div>
+    </div>
+    <div style="display:flex;gap:6px;flex-wrap:wrap;margin-bottom:6px">
+      <button type="button" onclick="rangoMerma('semana')" style="flex:1;padding:7px;border-radius:9px;border:1px solid #DDD;background:#fff;font-size:12px;cursor:pointer">Esta semana</button>
+      <button type="button" onclick="rangoMerma('pasada')" style="flex:1;padding:7px;border-radius:9px;border:1px solid #DDD;background:#fff;font-size:12px;cursor:pointer">Semana pasada</button>
+      <button type="button" onclick="rangoMerma('mes')" style="flex:1;padding:7px;border-radius:9px;border:1px solid #DDD;background:#fff;font-size:12px;cursor:pointer">Este mes</button>
+      <button type="button" onclick="rangoMerma('todo')" style="flex:1;padding:7px;border-radius:9px;border:1px solid #DDD;background:#fff;font-size:12px;cursor:pointer">Todas</button>
+    </div>
+    <div style="display:flex;gap:8px">
+      <button type="button" onclick="descargarMermasExcel()" style="flex:1;padding:11px;border-radius:10px;border:none;background:#1E8449;color:#fff;font-size:13px;font-weight:700;cursor:pointer">📊 Excel</button>
+      <button type="button" onclick="imprimirMermas()" style="flex:1;padding:11px;border-radius:10px;border:none;background:#C0392B;color:#fff;font-size:13px;font-weight:700;cursor:pointer">📄 PDF / Imprimir</button>
+    </div>
+    <div id="meDescInfo" style="font-size:11px;color:#888;margin-top:6px"></div>
+  </div>
   <div id="listMermas" style="margin-top:10px"></div>
 </div>
 
@@ -3668,6 +3687,70 @@ function renderMermas(){
   });
   html+='</div>';
   el.innerHTML=html;
+  infoMermasRango();
+}
+
+// ── DESCARGAR MERMAS ────────────────────────────────────────────────────────
+function _fISO(d){ return d.getFullYear()+'-'+String(d.getMonth()+1).padStart(2,'0')+'-'+String(d.getDate()).padStart(2,'0'); }
+function rangoMerma(t){
+  const hoy=new Date(HOY_STR+'T12:00:00'); let d='',h='';
+  const lunes=new Date(hoy); lunes.setDate(hoy.getDate()-((hoy.getDay()+6)%7));
+  if(t==='semana'){ d=_fISO(lunes); h=HOY_STR; }
+  else if(t==='pasada'){ const l=new Date(lunes); l.setDate(l.getDate()-7); const s=new Date(l); s.setDate(l.getDate()+6); d=_fISO(l); h=_fISO(s); }
+  else if(t==='mes'){ d=HOY_STR.substr(0,8)+'01'; h=HOY_STR; }
+  document.getElementById('meDesde').value=d; document.getElementById('meHasta').value=h;
+  infoMermasRango();
+}
+function mermasEnRango(){
+  const d=(document.getElementById('meDesde')||{}).value||'', h=(document.getElementById('meHasta')||{}).value||'';
+  const lista=(DB.mermas||[]).filter(m=>(!d||String(m.fecha)>=d)&&(!h||String(m.fecha)<=h))
+    .slice().sort((a,b)=>String(a.fecha).localeCompare(String(b.fecha)));
+  return {d,h,lista};
+}
+function infoMermasRango(){
+  const el=document.getElementById('meDescInfo'); if(!el) return;
+  const {lista}=mermasEnRango(); const cj=lista.reduce((a,m)=>a+(m.productos||[]).reduce((b,p)=>b+(+p.cant||0),0),0);
+  el.textContent=lista.length+' registro'+(lista.length!==1?'s':'')+' · '+cj+' caja'+(cj!==1?'s':'')+' en el rango';
+}
+function _nomMerma(sku){ try{ const c=buscarCatalogo(sku).find(x=>x.sku===sku); return c?c.nom:''; }catch(e){ return ''; } }
+function _rangoTxt(d,h){ return d||h?((d||'inicio')+' a '+(h||'hoy')):'todas'; }
+function descargarMermasExcel(){
+  const {d,h,lista}=mermasEnRango();
+  if(!lista.length){ alert('No hay mermas en ese rango.'); return; }
+  const esc=v=>{ v=String(v==null?'':v); return /[",\n;]/.test(v)?'"'+v.replace(/"/g,'""')+'"':v; };
+  const filas=[['Fecha','No. registro','Causa','Responsable','Clave','Producto','Cajas','Observaciones']];
+  lista.forEach(m=>(m.productos||[]).forEach(p=>filas.push([m.fecha,m.num||'',String(m.causa||'').replace(/^[^A-Za-zÁÉÍÓÚáéíóúÑñ]+/,''),m.responsable||'',p.sku,_nomMerma(p.sku),+p.cant||0,m.obs||''])));
+  const tot={}; lista.forEach(m=>(m.productos||[]).forEach(p=>{ tot[p.sku]=(tot[p.sku]||0)+(+p.cant||0); }));
+  filas.push([]); filas.push(['RESUMEN POR PRODUCTO']); filas.push(['Clave','Producto','Cajas']);
+  Object.entries(tot).sort((a,b)=>b[1]-a[1]).forEach(([s,c])=>filas.push([s,_nomMerma(s),c]));
+  filas.push(['TOTAL','',Object.values(tot).reduce((a,b)=>a+b,0)]);
+  const csv='\ufeff'+filas.map(r=>r.map(esc).join(',')).join('\r\n');
+  const blob=new Blob([csv],{type:'text/csv;charset=utf-8'});
+  const a=document.createElement('a'); a.href=URL.createObjectURL(blob);
+  a.download='mermas_'+(d||'inicio')+'_a_'+(h||HOY_STR)+'.csv';
+  document.body.appendChild(a); a.click(); setTimeout(()=>{ URL.revokeObjectURL(a.href); a.remove(); },1000);
+}
+function imprimirMermas(){
+  const {d,h,lista}=mermasEnRango();
+  if(!lista.length){ alert('No hay mermas en ese rango.'); return; }
+  const e=v=>String(v==null?'':v).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+  const tot={}, porCausa={}; let total=0;
+  lista.forEach(m=>(m.productos||[]).forEach(p=>{ const c=+p.cant||0; tot[p.sku]=(tot[p.sku]||0)+c; porCausa[m.causa||'Sin causa']=(porCausa[m.causa||'Sin causa']||0)+c; total+=c; }));
+  let html='<!doctype html><html><head><meta charset="utf-8"><title>Reporte de merma</title><style>body{font-family:Arial,sans-serif;font-size:12px;color:#222;margin:24px}h1{font-size:18px;margin:0 0 4px;color:#C0392B}h2{font-size:14px;margin:18px 0 6px;color:#1F3864}table{border-collapse:collapse;width:100%;margin-bottom:8px}th,td{border:1px solid #CCC;padding:4px 6px;text-align:left}th{background:#F2F2F2}td.n{text-align:right}.sub{color:#666;margin-bottom:10px}@media print{button{display:none}}</style></head><body>';
+  html+='<button onclick="window.print()" style="float:right;padding:8px 14px">Imprimir / Guardar PDF</button>';
+  html+='<h1>Reporte de merma</h1><div class="sub">TC del Norte Porcelanatos · Rango: '+e(_rangoTxt(d,h))+' · '+lista.length+' registros · <b>'+total+' cajas</b></div>';
+  html+='<h2>Por causa</h2><table><tr><th>Causa</th><th>Cajas</th><th>%</th></tr>'+Object.entries(porCausa).sort((a,b)=>b[1]-a[1]).map(([c,n])=>'<tr><td>'+e(c)+'</td><td class="n">'+n+'</td><td class="n">'+Math.round(n*100/total)+'%</td></tr>').join('')+'</table>';
+  html+='<h2>Por producto</h2><table><tr><th>Clave</th><th>Producto</th><th>Cajas</th></tr>'+Object.entries(tot).sort((a,b)=>b[1]-a[1]).map(([s,n])=>'<tr><td>'+e(s)+'</td><td>'+e(_nomMerma(s))+'</td><td class="n">'+n+'</td></tr>').join('')+'<tr><th colspan="2">Total</th><th class="n">'+total+'</th></tr></table>';
+  html+='<h2>Detalle por registro</h2>';
+  lista.forEach(m=>{ const n=(m.productos||[]).reduce((a,p)=>a+(+p.cant||0),0);
+    html+='<table><tr><th colspan="3">'+e(m.fecha)+' · '+e(m.num||'')+' · '+e(m.causa||'')+(m.responsable?' · '+e(m.responsable):'')+' · '+n+' cajas</th></tr>'
+      +(m.productos||[]).map(p=>'<tr><td style="width:22%">'+e(p.sku)+'</td><td>'+e(_nomMerma(p.sku))+'</td><td class="n" style="width:10%">'+(+p.cant||0)+'</td></tr>').join('')
+      +(m.obs?'<tr><td colspan="3" style="color:#666">'+e(m.obs)+'</td></tr>':'')+'</table>'; });
+  html+='</body></html>';
+  const w=window.open('','_blank');
+  if(!w){ alert('Tu navegador bloqueó la ventana. Permite ventanas emergentes para esta página.'); return; }
+  w.document.open(); w.document.write(html); w.document.close();
+  setTimeout(()=>{ try{ w.focus(); w.print(); }catch(err){} },500);
 }
 
 // ── HISTORIAL ─────────────────────────────────────────────────────────────
