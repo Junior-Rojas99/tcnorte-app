@@ -3736,8 +3736,7 @@ function imprimirMermas(){
   const e=v=>String(v==null?'':v).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
   const tot={}, porCausa={}; let total=0;
   lista.forEach(m=>(m.productos||[]).forEach(p=>{ const c=+p.cant||0; tot[p.sku]=(tot[p.sku]||0)+c; porCausa[m.causa||'Sin causa']=(porCausa[m.causa||'Sin causa']||0)+c; total+=c; }));
-  let html='<!doctype html><html><head><meta charset="utf-8"><title>Reporte de merma</title><style>body{font-family:Arial,sans-serif;font-size:12px;color:#222;margin:24px}h1{font-size:18px;margin:0 0 4px;color:#C0392B}h2{font-size:14px;margin:18px 0 6px;color:#1F3864}table{border-collapse:collapse;width:100%;margin-bottom:8px}th,td{border:1px solid #CCC;padding:4px 6px;text-align:left}th{background:#F2F2F2}td.n{text-align:right}.sub{color:#666;margin-bottom:10px}@media print{button{display:none}}</style></head><body>';
-  html+='<button onclick="window.print()" style="float:right;padding:8px 14px">Imprimir / Guardar PDF</button>';
+  let html='<div class="mp-bar no-print"><button type="button" onclick="window.print()" style="background:#C0392B;color:#fff">🖨️ Imprimir / Guardar PDF</button><button type="button" onclick="cerrarReporteMerma()" style="background:#EEE;color:#333">✕ Cerrar</button></div>';
   html+='<h1>Reporte de merma</h1><div class="sub">TC del Norte Porcelanatos · Rango: '+e(_rangoTxt(d,h))+' · '+lista.length+' registros · <b>'+total+' cajas</b></div>';
   html+='<h2>Por causa</h2><table><tr><th>Causa</th><th>Cajas</th><th>%</th></tr>'+Object.entries(porCausa).sort((a,b)=>b[1]-a[1]).map(([c,n])=>'<tr><td>'+e(c)+'</td><td class="n">'+n+'</td><td class="n">'+Math.round(n*100/total)+'%</td></tr>').join('')+'</table>';
   html+='<h2>Por producto</h2><table><tr><th>Clave</th><th>Producto</th><th>Cajas</th></tr>'+Object.entries(tot).sort((a,b)=>b[1]-a[1]).map(([s,n])=>'<tr><td>'+e(s)+'</td><td>'+e(_nomMerma(s))+'</td><td class="n">'+n+'</td></tr>').join('')+'<tr><th colspan="2">Total</th><th class="n">'+total+'</th></tr></table>';
@@ -3746,12 +3745,21 @@ function imprimirMermas(){
     html+='<table><tr><th colspan="3">'+e(m.fecha)+' · '+e(m.num||'')+' · '+e(m.causa||'')+(m.responsable?' · '+e(m.responsable):'')+' · '+n+' cajas</th></tr>'
       +(m.productos||[]).map(p=>'<tr><td style="width:22%">'+e(p.sku)+'</td><td>'+e(_nomMerma(p.sku))+'</td><td class="n" style="width:10%">'+(+p.cant||0)+'</td></tr>').join('')
       +(m.obs?'<tr><td colspan="3" style="color:#666">'+e(m.obs)+'</td></tr>':'')+'</table>'; });
-  html+='</body></html>';
-  const w=window.open('','_blank');
-  if(!w){ alert('Tu navegador bloqueó la ventana. Permite ventanas emergentes para esta página.'); return; }
-  w.document.open(); w.document.write(html); w.document.close();
-  setTimeout(()=>{ try{ w.focus(); w.print(); }catch(err){} },500);
+  if(!document.getElementById('mermaPrintCss')){
+    const st=document.createElement('style'); st.id='mermaPrintCss';
+    st.textContent='#mermaPrint{position:fixed;inset:0;z-index:99999;background:#fff;overflow:auto;padding:16px;font-family:Arial,sans-serif;font-size:12px;color:#222}'
+      +'#mermaPrint h1{font-size:18px;margin:0 0 4px;color:#C0392B}#mermaPrint h2{font-size:14px;margin:16px 0 6px;color:#1F3864}'
+      +'#mermaPrint table{border-collapse:collapse;width:100%;margin-bottom:8px}#mermaPrint th,#mermaPrint td{border:1px solid #CCC;padding:4px 6px;text-align:left}'
+      +'#mermaPrint th{background:#F2F2F2}#mermaPrint td.n,#mermaPrint th.n{text-align:right}#mermaPrint .sub{color:#666;margin-bottom:8px}'
+      +'#mermaPrint .mp-bar{position:sticky;top:-16px;background:#fff;padding:8px 0;display:flex;gap:8px;margin-bottom:6px}'
+      +'#mermaPrint .mp-bar button{flex:1;padding:12px;border:none;border-radius:10px;font-size:14px;font-weight:700;cursor:pointer}'
+      +'@media print{body>*:not(#mermaPrint){display:none!important}#mermaPrint{position:static!important;overflow:visible!important;padding:0}#mermaPrint .no-print{display:none!important}}';
+    document.head.appendChild(st);
+  }
+  cerrarReporteMerma();
+  const box=document.createElement('div'); box.id='mermaPrint'; box.innerHTML=html; document.body.appendChild(box);
 }
+function cerrarReporteMerma(){ const b=document.getElementById('mermaPrint'); if(b) b.remove(); }
 
 // ── HISTORIAL ─────────────────────────────────────────────────────────────
 let vistaHist='dia';
